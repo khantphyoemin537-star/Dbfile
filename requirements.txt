@@ -1,0 +1,8 @@
+python-telegram-bot
+telethon
+pymongo
+flask
+Pillow
+gunicorn
+dnspython
+pytz
