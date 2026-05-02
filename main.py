@@ -2,6 +2,9 @@ import asyncio
 import pymongo
 import random
 import re
+import os
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
 from telethon.sync import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.tl.functions.account import UpdateProfileRequest
@@ -9,6 +12,14 @@ from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest
 import dns.resolver
 
+# Render အတွက် Port အတုဖွင့်ပေးတဲ့ function
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), BaseHTTPRequestHandler)
+    server.serve_forever()
+
+# Bot မ run ခင် server ကို background မှာ run ခိုင်းပါ
+threading.Thread(target=run_dummy_server, daemon=True).start()
 # Termux DNS Fix
 dns.resolver.default_resolver = dns.resolver.Resolver(configure=False)
 dns.resolver.default_resolver.nameservers = ['8.8.8.8', '1.1.1.1']
