@@ -175,6 +175,12 @@ async def daily_couple(event):
     couple_col.insert_one({"chat_id": chat_id, "date": today, "couple_text": couple_text})
     await event.reply(bq(f"🏹 <b>Daily Couple</b>\n\n{couple_text}"), parse_mode="html")
 
-print("✅ BoD Bot Running...")
-bot.run_until_disconnected()
-
+if __name__ == "__main__":
+    print("✅ BoDx Sovereign System & Flask Active...")
+    
+    # Flask ကို Thread တစ်ခုအနေနဲ့ နောက်ကွယ်မှာ run မယ်
+    # ဒါမှ Render က Port ကို ရှာတွေ့မှာပါ
+    threading.Thread(target=run_flask, daemon=True).start()
+    
+    # Telegram Bot ကို Main Thread မှာ run မယ်
+    bot.run_until_disconnected()
