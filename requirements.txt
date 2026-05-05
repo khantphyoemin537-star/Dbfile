@@ -1,5 +1,10 @@
 telethon
+python-telegram-bot
 pymongo[srv]
 dnspython
 cryptg
 pytz
+flask
+Pillow
+gunicorn
+groq
