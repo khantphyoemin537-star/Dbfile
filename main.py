@@ -1,17 +1,59 @@
-import os
+import io
 import asyncio
-import random
 import logging
-from telethon import TelegramClient, events
-from pymongo import MongoClient
+import random
+import os
+import threading
+import re
 from datetime import datetime, timedelta
+import pytz
+from flask import Flask
+from pymongo import MongoClient
+from telethon import TelegramClient, events, types
+from telethon.tl.functions.channels import GetParticipantRequest
+from telethon.tl.types import (
+    ChannelParticipantAdmin, 
+    ChannelParticipantCreator, 
+    ChannelParticipantsAdmins,
+    ChatAdminRights
+)
+from html import escape as escape_html
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+from groq import Groq
+import random
 
-# --- Configuration ---
+# Groq AI Setup
+ai_client = Groq(api_key="Gsk_JfStkGNmhK2o8Ef9KHXkWGdyb3FYgnGjZYLxI14q0IIiweu82iQc")
+# ==========================================
+# 🌐 DNS FIX FOR MONGODB
+# ==========================================
+try:
+    import dns.resolver
+    dns.resolver.default_resolver = dns.resolver.Resolver(configure=False)
+    dns.resolver.default_resolver.nameservers = ['8.8.8.8', '1.1.1.1']
+except: pass
+
+# ==========================================
+# 🌐 FLASK KEEP-ALIVE
+# ==========================================
+app = Flask('')
+@app.route('/')
+def home(): return "BoDx Sovereign System & Guard Squad Active!"
+
+def run_flask(): 
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
+
+logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.ERROR)
+
+# ==========================================
+# ⚙️ CONFIGURATION & TOKENS
+# ==========================================
 BOT_TOKEN = "8738081667:AAGr7HkSxO6nC_QhPJJElKR2VKABTEDfNEo"
-API_ID = 23971901
-API_HASH = "80562ca6c0e57209304381393699b007"
-MONGO_URI = "mongodb+srv://khantthurain2024:khantthurain2024@cluster0.e6tms.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
-OWNER_ID = 6006155986 
+OWNER_ID = 6015356597
+MONGO_URI = "mongodb+srv://khantphyoemin537_db_user:9VRKiaeZkz7rJdpz@cluster0.w6tgi8j.mongodb.net/?appName=Cluster0&tlsAllowInvalidCertificates=true"
+APP_ID = 30765851
+APP_HASH = '235b0bc6f03767302dc75763508f7b75' 
 
 # --- Database ---
 client_db = MongoClient(MONGO_URI)
