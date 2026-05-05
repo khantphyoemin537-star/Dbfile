@@ -1,206 +1,514 @@
-import asyncio
-import pymongo
-import random
-import re
 import os
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
-from telethon.sync import TelegramClient, events
-from telethon.sessions import StringSession
-from telethon.tl.functions.account import UpdateProfileRequest
-from telethon.tl.functions.channels import JoinChannelRequest
-from telethon.tl.functions.messages import ImportChatInviteRequest
-import dns.resolver
+import asyncio
+import random
+import logging
 
-# Render အတွက် Port အတုဖွင့်ပေးတဲ့ function
-def run_dummy_server():
-    port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), BaseHTTPRequestHandler)
-    server.serve_forever()
+from telethon import TelegramClient, events
+from pymongo import MongoClient
+from datetime import datetime, timedelta
 
-# Bot မ run ခင် server ကို background မှာ run ခိုင်းပါ
-threading.Thread(target=run_dummy_server, daemon=True).start()
-# Termux DNS Fix
-dns.resolver.default_resolver = dns.resolver.Resolver(configure=False)
-dns.resolver.default_resolver.nameservers = ['8.8.8.8', '1.1.1.1']
+# =========================================================
+# CONFIG
+# =========================================================
 
-# --- CONFIGURATION ---
-API_ID = 30765851
-API_HASH = '235b0bc6f03767302dc75763508f7b75'
-BOT_TOKEN = '8575371720:AAEWWV42CGrwooM_joiJXdo2iEw2_7atyXU'
-MONGO_URI = "mongodb+srv://khantphyoemin537_db_user:9VRKiaeZkz7rJdpz@cluster0.w6tgi8j.mongodb.net/?retryWrites=true&w=majority&tlsAllowInvalidCertificates=true"
+# --- Configuration ---
+# ကိုကို ပေးထားတဲ့ Token အသစ်
+BOT_TOKEN = "8738081667:AAGr7HkSxO6nC_QhPJJElKR2VKABTEDfNEo"
 
-# Chat IDs & Owner
-STRING_CHAT = -1003836655698
-CONTROL_CHAT = -1003580630981
-OWNER_ID = 6015356597
+# အရင် main.py ထဲက အချက်အလက်အမှန်များ
+API_ID = 23971901
+API_HASH = "80562ca6c0e57209304381393699b007"
+MONGO_URI = "mongodb+srv://khantthurain2024:khantthurain2024@cluster0.e6tms.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 
-# DB Setup
-client_mongo = pymongo.MongoClient(MONGO_URI)
-db = client_mongo["telegram_bot"]
-autobio_col = db["autobio_col"]
+# သခင်လေး Dexter ရဲ့ ID (Admin Command တွေအတွက်)
+OWNER_ID = 6006155986 
 
-bot = TelegramClient('main_autospam_session', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
-# Global Variable for Master Spam Task
-active_spam_task = None
+# =========================================================
+# LOGGING
+# =========================================================
 
-# ==========================================
-# ၁။ Session String များကို DB သို့ သိမ်းဆည်းခြင်း
-# ==========================================
-@bot.on(events.NewMessage(chats=STRING_CHAT, pattern=r'^/string$'))
-async def save_session_string(event):
-    reply = await event.get_reply_message()
-    if reply and reply.text:
-        if not autobio_col.find_one({"session": reply.text}):
-            autobio_col.insert_one({"session": reply.text})
-            await bot.send_message(event.chat_id, "✅ Session String ကို 'autobio_col' တွင် အောင်မြင်စွာ သိမ်းဆည်းလိုက်ပါပြီ။", reply_to=event.id)
-        else:
-            await bot.send_message(event.chat_id, "⚠️ ဤ String သည် Database တွင် ရှိနှင့်ပြီးဖြစ်ပါသည်။", reply_to=event.id)
+logging.basicConfig(level=logging.INFO)
 
-# ==========================================
-# ၂။ Bio ပြောင်းလဲခြင်း
-# ==========================================
-@bot.on(events.NewMessage(chats=CONTROL_CHAT, pattern=r'(?i)^Bioထား$'))
-async def change_bio_cmd(event):
-    if event.sender_id != OWNER_ID: return
-    reply = await event.get_reply_message()
-    if not reply or not reply.text: return
-    
-    sessions = list(autobio_col.find())
-    for s in sessions:
-        asyncio.create_task(update_bio_task(s['session'], reply.text, event.chat_id, event.id))
+# =========================================================
+# DATABASE
+# =========================================================
 
-async def update_bio_task(session_str, bio_text, chat_id, reply_id):
-    user_client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
+try:
+    client_db = MongoClient(MONGO_URI)
+    client_db.admin.command("ping")
+    print("✅ MongoDB Connected")
+except Exception as e:
+    print("❌ MongoDB Error:", e)
+
+db = client_db["telegram_bot"]
+
+xp_col = db["user_reputation"]
+couple_col = db["daily_couples"]
+real_couple_col = db["real_life_couples"]
+
+# =========================================================
+# BOT
+# =========================================================
+
+bot = TelegramClient(
+    "bod_bot_session",
+    API_ID,
+    API_HASH
+).start(bot_token=BOT_TOKEN)
+
+# =========================================================
+# MEMORY
+# =========================================================
+
+xp_cooldown = {}
+
+# =========================================================
+# HELPERS
+# =========================================================
+
+def escape_html(text):
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+def bq(text):
+    return f"<blockquote>{text}</blockquote>"
+
+# =========================================================
+# XP SYSTEM
+# =========================================================
+
+async def save_xp_to_db(user_id, chat_id, added_xp):
+
+    user_data = xp_col.find_one({
+        "user_id": user_id,
+        "chat_id": chat_id
+    })
+
+    if not user_data:
+
+        xp_col.insert_one({
+            "user_id": user_id,
+            "chat_id": chat_id,
+            "xp": added_xp,
+            "level": 1
+        })
+
+        return added_xp, 1, False
+
+    current_xp = user_data.get("xp", 0) + added_xp
+    current_level = user_data.get("level", 1)
+
+    # LEVEL XP
+    next_level_xp = current_level * 2000
+
+    level_up = False
+
+    if current_xp >= next_level_xp:
+        current_level += 1
+        level_up = True
+
+    xp_col.update_one(
+        {
+            "user_id": user_id,
+            "chat_id": chat_id
+        },
+        {
+            "$set": {
+                "xp": current_xp,
+                "level": current_level
+            }
+        }
+    )
+
+    return current_xp, current_level, level_up
+
+# =========================================================
+# AUTO XP
+# =========================================================
+
+@bot.on(events.NewMessage)
+async def xp_system(event):
+
     try:
-        await user_client.connect()
-        if await user_client.is_user_authorized():
-            await user_client(UpdateProfileRequest(about=bio_text))
-            await user_client.send_message(chat_id, f"✅ Bio အား '{bio_text}' သို့ ပြောင်းလဲပြီးပါပြီ။", reply_to=reply_id)
-    except Exception:
-        pass
-    finally:
-        if user_client.is_connected(): await user_client.disconnect()
 
-# ==========================================
-# ၃။ Auto Join (Account အကုန်မဝင်အောင် Limit လုပ်ထားသည်)
-# ==========================================
-@bot.on(events.NewMessage(chats=CONTROL_CHAT, pattern=r'(?i)^ဝင်လိုက်ကြ$'))
-async def auto_join_cmd(event):
-    if event.sender_id != OWNER_ID: return
-    reply = await event.get_reply_message()
-    if not reply or not reply.text: return
+        if event.is_private:
+            return
 
-    # Link ကို ရှာဖွေခြင်း (t.me/username သို့မဟုတ် t.me/+hash)
-    link_match = re.search(r'(https?://t\.me/[^\s]+)', reply.text)
-    if not link_match:
-        return await event.respond("⚠️ Reply လုပ်ထားသောစာတွင် Telegram Link မတွေ့ပါ။")
-    
-    link = link_match.group(1)
-    sessions = list(autobio_col.find())
-    if not sessions: return
+        if not event.sender:
+            return
 
-    # Account အကုန်မဝင်စေရန် ကျပန်း ၂ ခု သို့မဟုတ် ၃ ခုကိုသာ ရွေးချယ်မည်
-    join_limit = min(3, len(sessions)) 
-    target_sessions = random.sample(sessions, join_limit)
-    
-    await event.respond(f"⏳ Group လုံခြုံရေးအရ Account ({join_limit}) ခုဖြင့်သာ Group သို့ ဝင်ရောက်နေပါသည်...")
+        if event.sender.bot:
+            return
 
-    for s in target_sessions:
-        asyncio.create_task(join_group_task(s['session'], link, event.chat_id, event.id))
+        if not event.raw_text:
+            return
 
-async def join_group_task(session_str, link, chat_id, reply_id):
-    client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
-    try:
-        await client.connect()
-        if await client.is_user_authorized():
-            if '+' in link or 'joinchat' in link:
-                hash_val = link.split('/')[-1].replace('+', '')
-                await client(ImportChatInviteRequest(hash_val))
-            else:
-                username = link.split('/')[-1]
-                await client(JoinChannelRequest(username))
-            
-            await client.send_message(chat_id, f"✅ {link} သို့ အောင်မြင်စွာ ဝင်ရောက်ပြီးပါပြီ။", reply_to=reply_id)
+        # SHORT MESSAGE BLOCK
+        if len(event.raw_text) < 3:
+            return
+
+        user_id = event.sender_id
+        chat_id = event.chat_id
+
+        key = f"{chat_id}:{user_id}"
+
+        now = datetime.now()
+
+        # 30 SEC COOLDOWN
+        if key in xp_cooldown:
+
+            if now - xp_cooldown[key] < timedelta(seconds=30):
+                return
+
+        xp_cooldown[key] = now
+
+        added_xp = random.randint(5, 15)
+
+        xp, level, level_up = await save_xp_to_db(
+            user_id,
+            chat_id,
+            added_xp
+        )
+
+        # LEVEL UP MESSAGE
+        if level_up:
+
+            mention = (
+                f"<a href='tg://user?id={user_id}'>"
+                f"{escape_html(event.sender.first_name or 'User')}"
+                f"</a>"
+            )
+
+            await event.reply(
+                bq(
+                    f"🎉 LEVEL UP!\n\n"
+                    f"{mention} reached Level {level}!"
+                ),
+                parse_mode="html"
+            )
+
     except Exception as e:
-        await client.send_message(chat_id, f"❌ ဝင်ရောက်ရန် မအောင်မြင်ပါ: {str(e)}", reply_to=reply_id)
-    finally:
-        if client.is_connected(): await client.disconnect()
+        print("XP ERROR:", e)
 
-# ==========================================
-# ၄။ လူခိုး Command - Master Spammer (၂ ခုထက်ပိုမပို့သောစနစ်)
-# ==========================================
-@bot.on(events.NewMessage(chats=CONTROL_CHAT, pattern=r'^လူခိုး\s*(\d+)min$'))
-async def auto_spam_cmd(event):
-    global active_spam_task
-    if event.sender_id != OWNER_ID: return
-    reply = await event.get_reply_message()
-    if not reply or not reply.text: return
-    
-    minutes = int(event.pattern_match.group(1))
-    spam_text = reply.text
-    
-    # ယခင် Run နေသော Spam Loop ရှိပါက ရပ်တန့်မည်
-    if active_spam_task:
-        active_spam_task.cancel()
-    
-    # Master Task အသစ်စတင်မည်
-    active_spam_task = asyncio.create_task(master_spammer(spam_text, minutes, event.chat_id, event.id))
+# =========================================================
+# RANK COMMAND
+# =========================================================
 
-async def master_spammer(spam_text, mins, chat_id, reply_id):
-    # စတင်ကြောင်း Owner ထံ အရင် Ack ပြန်ပို့မည် (Account တစ်ခုချင်းစီမှ)
-    initial_sessions = list(autobio_col.find())
-    for s in initial_sessions:
-        client = TelegramClient(StringSession(s['session']), API_ID, API_HASH)
-        try:
-            await client.connect()
-            if await client.is_user_authorized():
-                ack_msg = f"Group တိုင်းကိုလိုက်ပို့မည်\nပို့မည့်စာက \"{spam_text}\"\nအချိန်သတ်မှတ်ချက် {mins} မိနစ်တစ်ခါ"
-                await client.send_message(chat_id, ack_msg, reply_to=reply_id)
-        except Exception:
-            pass
-        finally:
-            if client.is_connected(): await client.disconnect()
+@bot.on(events.NewMessage(pattern=r"^/rank$"))
+async def show_rank(event):
 
-    # Main Spam Loop စတင်ခြင်း
     try:
-        while True:
-            sessions = list(autobio_col.find())
-            # Group တစ်ခုကို အကောင့်ဘယ်နှစ်ခုက ပို့ပြီးပြီလဲ မှတ်သားမည့် Dictionary (Loop တစ်ပတ်တိုင်း အသစ်ပြန်စသည်)
-            spammed_groups = {} 
-            
-            for s in sessions:
-                user_client = TelegramClient(StringSession(s['session']), API_ID, API_HASH)
-                try:
-                    await user_client.connect()
-                    if not await user_client.is_user_authorized():
-                        continue
-                    
-                    async for dialog in user_client.iter_dialogs():
-                        if dialog.is_group:
-                            # ဒီ Group ကို ပို့ပြီးသား အကြိမ်အရေအတွက်ကို ယူမည်
-                            current_count = spammed_groups.get(dialog.id, 0)
-                            
-                            # ၂ ကြိမ်အောက်သာ ပို့ရမည်
-                            if current_count < 2:
-                                try:
-                                    await user_client.send_message(dialog.id, spam_text)
-                                    spammed_groups[dialog.id] = current_count + 1
-                                    await asyncio.sleep(2) # Flood wait မဖြစ်စေရန်
-                                except Exception:
-                                    pass # Mute ခံထားရပါက ကျော်သွားမည်
-                except Exception:
-                    pass
-                finally:
-                    if user_client.is_connected(): await user_client.disconnect()
-            
-            # သတ်မှတ်ထားသော မိနစ်ပြည့်အောင် စောင့်မည်
-            await asyncio.sleep(mins * 60)
-            
-    except asyncio.CancelledError:
-        print("ယခင် Spam Loop ကို ရပ်တန့်လိုက်ပါသည်။")
 
-# ==========================================
-print("🚀 Dexter's Super Spammer Bot စတင် အလုပ်လုပ်နေပါပြီ...")
+        user_id = event.sender_id
+
+        if event.is_reply:
+            reply = await event.get_reply_message()
+            user_id = reply.sender_id
+
+        user_data = xp_col.find_one({
+            "user_id": user_id,
+            "chat_id": event.chat_id
+        })
+
+        if not user_data:
+            return await event.reply(
+                bq(
+                    "Reputation Record မရှိသေးပါဘူး။"
+                ),
+                parse_mode="html"
+            )
+
+        level = user_data.get("level", 1)
+        xp = user_data.get("xp", 0)
+
+        ranks = {
+            1: "Recruit",
+            5: "Watcher",
+            10: "Elite",
+            20: "Shadow Knight",
+            35: "Warlord",
+            50: "Sovereign",
+            100: "Immortal"
+        }
+
+        rank_name = next(
+            (
+                name
+                for lv, name in sorted(
+                    ranks.items(),
+                    reverse=True
+                )
+                if level >= lv
+            ),
+            "Recruit"
+        )
+
+        next_level_xp = level * 2000
+
+        progress = int(
+            (xp / next_level_xp) * 100
+        )
+
+        if progress > 100:
+            progress = 100
+
+        filled = "█" * (progress // 10)
+        empty = "░" * (10 - (progress // 10))
+
+        bar = filled + empty
+
+        res = (
+            f"📊 <b>BOD REPUTATION</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"👤 Rank: <b>{rank_name}</b>\n"
+            f"🆙 Level: <b>{level}</b>\n"
+            f"✨ XP: <b>{xp}</b>\n"
+            f"🎯 Next Level: <b>{next_level_xp}</b>\n"
+            f"📈 [{bar}] {progress}%\n"
+            f"━━━━━━━━━━━━━━━━━━"
+        )
+
+        await event.reply(
+            bq(res),
+            parse_mode="html"
+        )
+
+    except Exception as e:
+        print("RANK ERROR:", e)
+
+# =========================================================
+# TOP COMMAND
+# =========================================================
+
+@bot.on(events.NewMessage(pattern=r"^/top$"))
+async def leaderboard(event):
+
+    try:
+
+        top_users = xp_col.find({
+            "chat_id": event.chat_id
+        }).sort("xp", -1).limit(10)
+
+        text = "🏆 <b>BOD TOP USERS</b>\n\n"
+
+        count = 1
+
+        async for user in _async_cursor(top_users):
+
+            try:
+                entity = await bot.get_entity(
+                    user["user_id"]
+                )
+
+                name = escape_html(
+                    entity.first_name or "User"
+                )
+
+                text += (
+                    f"{count}. {name}\n"
+                    f"Level: {user['level']} | "
+                    f"XP: {user['xp']}\n\n"
+                )
+
+                count += 1
+
+            except:
+                pass
+
+        await event.reply(
+            bq(text),
+            parse_mode="html"
+        )
+
+    except Exception as e:
+        print("TOP ERROR:", e)
+
+# =========================================================
+# HELPER
+# =========================================================
+
+async def _async_cursor(cursor):
+    for doc in cursor:
+        yield doc
+
+# =========================================================
+# ADD REAL COUPLE
+# =========================================================
+
+@bot.on(events.NewMessage(pattern=r"^/addcouple"))
+async def add_real_couple(event):
+
+    try:
+
+        if event.sender_id != OWNER_ID:
+            return await event.reply(
+                bq("Owner Only Command"),
+                parse_mode="html"
+            )
+
+        if not event.is_reply:
+            return await event.reply(
+                bq(
+                    "Reply User + /addcouple @username"
+                ),
+                parse_mode="html"
+            )
+
+        reply = await event.get_reply_message()
+
+        u1_id = reply.sender_id
+
+        parts = event.text.split()
+
+        if len(parts) < 2:
+            return await event.reply(
+                bq("Need Username"),
+                parse_mode="html"
+            )
+
+        try:
+            u2 = await bot.get_entity(parts[1])
+            u2_id = u2.id
+
+        except:
+            return await event.reply(
+                bq("User Not Found"),
+                parse_mode="html"
+            )
+
+        real_couple_col.update_one(
+            {"user_id": u1_id},
+            {
+                "$set": {
+                    "partner": u2_id
+                }
+            },
+            upsert=True
+        )
+
+        real_couple_col.update_one(
+            {"user_id": u2_id},
+            {
+                "$set": {
+                    "partner": u1_id
+                }
+            },
+            upsert=True
+        )
+
+        await event.reply(
+            bq("✅ Couple Saved"),
+            parse_mode="html"
+        )
+
+    except Exception as e:
+        print("ADD COUPLE ERROR:", e)
+
+# =========================================================
+# DAILY COUPLE
+# =========================================================
+
+@bot.on(events.NewMessage(pattern=r"^/couple$"))
+async def daily_couple(event):
+
+    try:
+
+        if event.is_private:
+            return
+
+        chat_id = event.chat_id
+
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        existing = couple_col.find_one({
+            "chat_id": chat_id,
+            "date": today
+        })
+
+        if existing:
+
+            return await event.reply(
+                bq(
+                    f"❤️ Today's Couple\n\n"
+                    f"{existing['couple_text']}"
+                ),
+                parse_mode="html"
+            )
+
+        participants = await bot.get_participants(
+            chat_id
+        )
+
+        real_users = [
+            doc["user_id"]
+            for doc in real_couple_col.find()
+        ]
+
+        eligible = [
+            u.id
+            for u in participants
+            if not u.bot
+            and u.id not in real_users
+        ]
+
+        if len(eligible) < 2:
+
+            return await event.reply(
+                bq("Not Enough Users"),
+                parse_mode="html"
+            )
+
+        c1_id, c2_id = random.sample(
+            eligible,
+            2
+        )
+
+        u1 = await bot.get_entity(c1_id)
+        u2 = await bot.get_entity(c2_id)
+
+        mention1 = (
+            f"<a href='tg://user?id={c1_id}'>"
+            f"{escape_html(u1.first_name or 'User')}"
+            f"</a>"
+        )
+
+        mention2 = (
+            f"<a href='tg://user?id={c2_id}'>"
+            f"{escape_html(u2.first_name or 'User')}"
+            f"</a>"
+        )
+
+        couple_text = (
+            f"{mention1} ❤️ {mention2}"
+        )
+
+        couple_col.insert_one({
+            "chat_id": chat_id,
+            "date": today,
+            "users": [c1_id, c2_id],
+            "couple_text": couple_text
+        })
+
+        await event.reply(
+            bq(
+                f"🏹 <b>Daily Couple</b>\n\n"
+                f"{couple_text}"
+            ),
+            parse_mode="html"
+        )
+
+    except Exception as e:
+        print("COUPLE ERROR:", e)
+
+# =========================================================
+# START
+# =========================================================
+
+print("✅ BoD Bot Running...")
+
 bot.run_until_disconnected()
