@@ -52,8 +52,8 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=lo
 BOT_TOKEN = "8738081667:AAGr7HkSxO6nC_QhPJJElKR2VKABTEDfNEo"
 OWNER_ID = 6015356597
 MONGO_URI = "mongodb+srv://khantphyoemin537_db_user:9VRKiaeZkz7rJdpz@cluster0.w6tgi8j.mongodb.net/?appName=Cluster0&tlsAllowInvalidCertificates=true"
-APP_ID = 30765851
-APP_HASH = '235b0bc6f03767302dc75763508f7b75' 
+API_ID = 30765851
+API_HASH = '235b0bc6f03767302dc75763508f7b75' 
 
 # --- Database ---
 client_db = MongoClient(MONGO_URI)
